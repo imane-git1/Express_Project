@@ -1,95 +1,99 @@
-import { authQueries } from '../database/queries/authQueries.js';
-import { connection } from '../config/database.js';
+import { validationResult } from 'express-validator';
+import { db } from '../config/database.js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { authQueries } from '../database/queries/authQueries.js';
+import { findUserWithEmail, findUserWithName, findUserById } from '../services/auth_service.js';
 
 const { 
   GET_ALL_USERS,
-  GET_USER_BY_ID,
-  FIND_USER_BY_EMAIL,
   CREATE_USER,
-  DELETE_USER 
+  UPDATE_USER_PROFILE,
+  DELETE_USER_ACCOUNT_BY_ID
 } = authQueries();
+
 
 // console.log("✅ FIND_USER_BY_EMAIL:", FIND_USER_BY_EMAIL);
 // console.log("✅ CREATE_USER:", CREATE_USER);
 
 const register = async (req, res) => {
-  const { name, email, password, role } = req.body;
+  const result = validationResult(req);
 
-  if (!name || !email || !password || !role) {
-    return res.status(400).json({ message: 'Please fill in all fields' });
+  if (!result.isEmpty()) {
+    return res.status(400).json({ errors: result.array() });
   }
 
-  // console.log("🔍 Requête SQL FIND_USER_BY_EMAIL:", FIND_USER_BY_EMAIL);
-  // console.log("🔍 Requête SQL CREATE_USER:", CREATE_USER);
+  const { name, email, password, role } = req.body;
 
   try {
-    // console.log("🔍 Vérification de l'utilisateur avec l'email:", email);
-    const [users] = await connection.execute(FIND_USER_BY_EMAIL, [email]);
+    const userExist = await findUserWithEmail(email); 
+    const userExistName = await findUserWithName(name);
 
-    if (users.length) {
+    if (userExist.exist || userExistName.exist) {
       return res.status(400).json({ message: 'User already exists' });
     }
 
     const salt = bcrypt.genSaltSync(10);
     const hashedPassword = bcrypt.hashSync(password, salt);
 
-    // console.log("✅ Ajout de l'utilisateur avec :", name, email, hashedPassword, role);
-    await connection.execute(CREATE_USER, [name, email, hashedPassword, role]);
+    await db.execute(CREATE_USER, [name, email, hashedPassword, role]);
 
     res.status(201).json({ message: 'User created' });
   } catch (err) {
-    console.error("Error:", err);
+    console.error(err);
     res.status(500).json({ message: 'Server error' });
   }
 }
 
 const login = async (req, res) => {
-  const { email, password } = req.body;
+  const result = validationResult(req);
 
-  if (!email || !password) {
-    return res.status(400).json({ message: 'Please fill in all fields' });
+  if (!result.isEmpty()) {
+    return res.status(400).json({ errors: result.array() });
   }
 
+  const { email, password } = req.body;
+
   try {
-    const [users] = await connection.execute(FIND_USER_BY_EMAIL, [email]);
+    const user = await findUserWithEmail(email);
 
-    if (!users.length) {
+    if (!user.exist) {
       return res.status(400).json({ message: 'Invalid credentials' });
     }
 
-    const user = users[0];
-    const isPasswordValid = bcrypt.compareSync(password, user.password);
+    const isValidPassword = bcrypt.compareSync(password, user.user.password);
 
-    if (!isPasswordValid) {
+    if (!isValidPassword) {
       return res.status(400).json({ message: 'Invalid credentials' });
     }
 
-    const payload = {
-      id: user.id,
-      email: user.email,
-      role: user.role
-    };
-
-    const token = jwt.sign(payload, process.env.AUTH_JWT_SECRET, 
-      { 
-        expiresIn: process.env.AUTH_JWT_TOKEN_EXPIRES_IN 
-      });
-
-    res.status(200).json({ token });
+    const token = jwt.sign({
+       id: user.user.id, 
+       name: user.user.name, 
+       email : user.user.email, 
+       role: user.user.role 
+      }, 
+      process.env.AUTH_JWT_SECRET, 
+      {expiresIn: process.env.AUTH_JWT_TOKEN_EXPIRES_IN}
+    );
+    
+    res.status(200).json({ 
+      message: 'Login successful',
+      token 
+    });
   } catch (err) {
-    console.error("Error:", err);
+    console.error(err);
     res.status(500).json({ message: 'Server error' });
   }
 }
 
 const getAllUsers = async (req, res) => {
   try {
-    const [users] = await connection.execute(GET_ALL_USERS);
+    const [users] = await db.execute(GET_ALL_USERS);
 
     res.status(200).json(users);
   } catch (err) {
+    console.error(err);
     res.status(500).json({ message: 'Server error' });
   }
 }
@@ -98,14 +102,79 @@ const getUserById = async (req, res) => {
   const { id } = req.params;
 
   try {
-    const [users] = await connection.execute(GET_USER_BY_ID, [id]);
+    const user = await (findUserById(id));
 
-    if (!users.length) {
+    if (!user.exist) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    res.status(200).json(users[0]);
+    res.status(200).json(user.user);
   } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+}
+
+const getProfile = async (req, res) => {
+  console.log("User from request:", req.user);
+  if (!req.user || !req.user.email) {
+    return res.status(401).json({ message: "Unauthorized: Missing user data" });
+  }
+
+  const { email } = req.user;
+
+  try {
+    const user = await findUserWithEmail(email);
+
+    if (!user.exist) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const { password, ...userData } = user.user;
+
+    res.status(200).json(userData);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ 
+      message: 'Server error'
+    });
+  }
+}
+
+const updateProfile = async (req, res) => {
+  if (!req.user || !req.user.id) {
+    return res.status(401).json({ message: "Unauthorized: Missing user data" });
+  }
+
+  const { id } = req.user;
+  const { name, email, password } = req.body; 
+
+  const result = validationResult(req);
+
+  if (!result.isEmpty()) {
+    return res.status(400).json({ errors: result.array() });
+  }
+
+  try {
+
+    if (email) {
+      const existingUser = await findUserWithEmail(email);
+      if (existingUser.exist && existingUser.user.id !== id) {
+        return res.status(400).json({ message: "Email already in use" });
+      }
+    }
+
+    let hashedPassword = null;
+    if (password) {
+      const salt = bcrypt.genSaltSync(10);
+      hashedPassword = bcrypt.hashSync(password, salt);
+    }
+
+    await db.execute(UPDATE_USER_PROFILE, [name, email, hashedPassword || null, id]);
+
+    res.status(200).json({ message: 'Profile updated successfuly' });
+  } catch (err) {
+    console.error(err);
     res.status(500).json({ message: 'Server error' });
   }
 }
@@ -114,12 +183,19 @@ const deleteUser = async (req, res) => {
   const { id } = req.params;
 
   try {
-    await connection.execute(DELETE_USER, [id]);
+    const user = await findUserWithEmail(email);
+
+    if (!user.exist) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    await db.execute(DELETE_USER_ACCOUNT_BY_ID, [id]);
 
     res.status(200).json({ message: 'User deleted' });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ message: 'Server error' });
   }
 }
 
-export { register, login, getAllUsers, getUserById, deleteUser };
+export { register, login, getAllUsers, getUserById, getProfile, updateProfile, deleteUser };

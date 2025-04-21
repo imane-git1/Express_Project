@@ -3,7 +3,7 @@ import { validationResult } from 'express-validator';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import prisma from '../config/prismaClient.js';
-import { findUserWithName, findUserWithEmail, findUserById } from '../services/auth_service.js';
+import { findUserWithEmail, findUserById } from '../services/auth_service.js';
 
 
 // console.log("✅ FIND_USER_BY_EMAIL:", FIND_USER_BY_EMAIL);
@@ -102,6 +102,11 @@ const getAllUsers = async (req, res) => {
 
 const getUserById = async (req, res) => { 
   const { id } = req.params;
+  const authenticatedUser = req.user;
+
+  if (authenticatedUser.role !== 'admin' && parseInt(id) !== authenticatedUser.id) {
+    return res.status(403).json({ message: "Access denied: unauthorized access to this resource" });
+  }
 
   try {
     const getuser = await findUserById(id);
@@ -189,18 +194,25 @@ const updateProfile = async (req, res) => {
 }
 
 const deleteUser = async (req, res) => {
-  const { id } = req.params;
+  const idParam = req.params.id;
+  const id = parseInt(idParam);
+
+  if (isNaN(id)) {
+    return res.status(400).json({ message: "Invalid user ID" });
+  }
 
   try {
-    const user = await prisma.user.findUnique({ where: { id: parseInt(id) } });
+    const user = await prisma.user.findUnique({ where: { id } });
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    await prisma.user.delete({
-      where: { id: parseInt(id) }
-    });
+    if (req.user.id === id) {
+      return res.status(403).json({ message: "You cannot delete your own account" });
+    }
+
+    await prisma.user.delete({ where: { id } });
 
     res.status(200).json({ message: 'User deleted' });
   } catch (err) {

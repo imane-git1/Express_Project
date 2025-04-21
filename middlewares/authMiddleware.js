@@ -1,5 +1,4 @@
-import { db } from '../config/database.js';
-import { decodeToken } from '../services/auth_service.js';
+import { decodeToken, getUserRole } from '../services/auth_service.js';
 
 
 const authMiddleware = async (req, res, next) => {
@@ -36,18 +35,19 @@ const authMiddleware = async (req, res, next) => {
 
 const isAdmin = async (req, res, next) => {
   try {
-    const { GET_ROLE_NAME } = authQueries();
     const { id } = req.user;
 
-    // Attente du résultat de la requête SQL
-    const [data] = await db.execute(GET_ROLE_NAME(id));
+    const getrole = await getUserRole(id);
 
-    // Vérification du rôle
-    if (data[0].role !== "admin") {
-      next(); // L'utilisateur est un admin, on continue l'exécution
-    } 
+    if (!getrole.exist) {
+      return res.status(404).json({ message: "User not found" });
+    }
 
-    return next(); // L'utilisateur n'est pas un admin,
+    if (getrole.role !== "admin") {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    return next(); 
   }catch (err) {
       return res.status(500).json({ message: "Server error" });
   };

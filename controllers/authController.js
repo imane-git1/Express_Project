@@ -1,16 +1,9 @@
 import { validationResult } from 'express-validator';
-import { db } from '../config/database.js';
+// import { db } from '../config/database.js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { authQueries } from '../database/queries/authQueries.js';
-import { findUserWithEmail, findUserWithName, findUserById } from '../services/auth_service.js';
-
-const { 
-  GET_ALL_USERS,
-  CREATE_USER,
-  UPDATE_USER_PROFILE,
-  DELETE_USER_ACCOUNT_BY_ID
-} = authQueries();
+import prisma from '../config/prismaClient.js';
+import { findUserWithName, findUserWithEmail, findUserById } from '../services/auth_service.js';
 
 
 // console.log("✅ FIND_USER_BY_EMAIL:", FIND_USER_BY_EMAIL);
@@ -26,17 +19,25 @@ const register = async (req, res) => {
   const { name, email, password, role } = req.body;
 
   try {
-    const userExist = await findUserWithEmail(email); 
-    const userExistName = await findUserWithName(name);
+    const existingUser = await prisma.user.findUnique({
+      where: { email }
+    });
 
-    if (userExist.exist || userExistName.exist) {
+    if (existingUser) {
       return res.status(400).json({ message: 'User already exists' });
     }
 
     const salt = bcrypt.genSaltSync(10);
     const hashedPassword = bcrypt.hashSync(password, salt);
 
-    await db.execute(CREATE_USER, [name, email, hashedPassword, role]);
+    await prisma.user.create({
+      data: {
+        name,
+        email,
+        password: hashedPassword,
+        role
+      }
+    });
 
     res.status(201).json({ message: 'User created' });
   } catch (err) {
@@ -55,23 +56,25 @@ const login = async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    const user = await findUserWithEmail(email);
+    const user = await prisma.user.findUnique({ 
+      where: { email } 
+    });
 
-    if (!user.exist) {
+    if (!user) {
       return res.status(400).json({ message: 'Invalid credentials' });
     }
 
-    const isValidPassword = bcrypt.compareSync(password, user.user.password);
+    const isValidPassword = bcrypt.compareSync(password, user.password);
 
     if (!isValidPassword) {
       return res.status(400).json({ message: 'Invalid credentials' });
     }
 
     const token = jwt.sign({
-       id: user.user.id, 
-       name: user.user.name, 
-       email : user.user.email, 
-       role: user.user.role 
+       id: user.id, 
+       name: user.name, 
+       email : user.email, 
+       role: user.role 
       }, 
       process.env.AUTH_JWT_SECRET, 
       {expiresIn: process.env.AUTH_JWT_TOKEN_EXPIRES_IN}
@@ -89,8 +92,7 @@ const login = async (req, res) => {
 
 const getAllUsers = async (req, res) => {
   try {
-    const [users] = await db.execute(GET_ALL_USERS);
-
+    const users = await prisma.user.findMany();
     res.status(200).json(users);
   } catch (err) {
     console.error(err);
@@ -102,13 +104,13 @@ const getUserById = async (req, res) => {
   const { id } = req.params;
 
   try {
-    const user = await (findUserById(id));
+    const getuser = await findUserById(id);
 
-    if (!user.exist) {
+    if (!getuser.exist) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    res.status(200).json(user.user);
+    res.status(200).json(getuser.user);
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Server error' });
@@ -170,8 +172,15 @@ const updateProfile = async (req, res) => {
       hashedPassword = bcrypt.hashSync(password, salt);
     }
 
-    await db.execute(UPDATE_USER_PROFILE, [name, email, hashedPassword || null, id]);
-
+    await prisma.user.update({
+      where: { id },
+      data: {
+        name,
+        email,
+        password: hashedPassword || undefined
+      }
+    });
+    
     res.status(200).json({ message: 'Profile updated successfuly' });
   } catch (err) {
     console.error(err);
@@ -183,13 +192,15 @@ const deleteUser = async (req, res) => {
   const { id } = req.params;
 
   try {
-    const user = await findUserWithEmail(email);
+    const user = await prisma.user.findUnique({ where: { id: parseInt(id) } });
 
-    if (!user.exist) {
+    if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    await db.execute(DELETE_USER_ACCOUNT_BY_ID, [id]);
+    await prisma.user.delete({
+      where: { id: parseInt(id) }
+    });
 
     res.status(200).json({ message: 'User deleted' });
   } catch (err) {

@@ -15,7 +15,7 @@ router.post("/login", loginValidator, login);
 router.get("/users", getAllUsers);
 
 // Get user by id
-router.get("/user/:id", getUserById);
+router.get("/user/:id", authMiddleware, getUserById);
 
 // Get profile
 router.get("/profile", authMiddleware, getProfile);

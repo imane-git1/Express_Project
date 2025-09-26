@@ -2,12 +2,10 @@ import { validationResult } from 'express-validator';
 // import { db } from '../config/database.js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import prisma from '../config/prismaClient.js';
 import { findUserWithEmail, findUserById } from '../services/auth_service.js';
 
-
-// console.log("✅ FIND_USER_BY_EMAIL:", FIND_USER_BY_EMAIL);
-// console.log("✅ CREATE_USER:", CREATE_USER);
 
 const register = async (req, res) => {
   const result = validationResult(req);
@@ -30,14 +28,22 @@ const register = async (req, res) => {
     const salt = bcrypt.genSaltSync(10);
     const hashedPassword = bcrypt.hashSync(password, salt);
 
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiry = new Date(Date.now() + 1000 * 60 * 60);
+
     await prisma.user.create({
       data: {
         name,
         email,
         password: hashedPassword,
-        role
+        role,
+        email_verification_token: token,
+        email_verification_expires: expiry,
+        isActive: false,
       }
     });
+
+    console.log(`🔗 Confirme ton compte : http://localhost:3000/api/auth/confirm?token=${token}`);
 
     res.status(201).json({ message: 'User created' });
   } catch (err) {
@@ -64,6 +70,10 @@ const login = async (req, res) => {
       return res.status(400).json({ message: 'Invalid credentials' });
     }
 
+    if (!user.isActive) {
+      return res.status(403).json({ message: "Please confirm your email before logging in." });
+    }
+    
     const isValidPassword = bcrypt.compareSync(password, user.password);
 
     if (!isValidPassword) {
@@ -88,6 +98,44 @@ const login = async (req, res) => {
     console.error(err);
     res.status(500).json({ message: 'Server error' });
   }
+}
+
+const confirmEmail = async (req, res) => {
+  const { token } = req.params;
+
+  if (!token) {
+    return res.status(400).json({ message: 'Token is required' });
+  }
+
+  try {
+    const user = await prisma.user.findFirst({
+      where: {
+        email_verification_token: token,
+        email_verification_expires: {
+          gte: new Date()
+        }
+      }
+    });
+
+    if (!user) {
+      return res.status(400).json({ message: 'Invalid or expired token' });
+    }
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        isActive: true,
+        email_verification_token: null,
+        email_verification_expires: null
+      }
+    });
+
+    res.status(200).json({ message: 'Email confirmed successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+
 }
 
 const getAllUsers = async (req, res) => {
@@ -221,4 +269,79 @@ const deleteUser = async (req, res) => {
   }
 }
 
-export { register, login, getAllUsers, getUserById, getProfile, updateProfile, deleteUser };
+const forgotPassword = async (req, res) => {
+  const { email } = req.body;
+  
+  if (!email) {
+    return res.status(400).json({ message: "Email is required" });
+  }
+
+  try {
+    const user = await prisma.user.findUnique({ where: { email } });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiry = new Date(Date.now() + 1000 * 60 * 15); 
+
+    await prisma.user.update({
+      where: { email },
+      data: {
+        password_reset_token: token,
+        password_reset_expires: expiry
+      }
+    });
+
+    console.log(`Reset password link: http://localhost:3000/auth/reset-password?token=${token}`);
+
+    return res.status(200).json({ message: "Reset link sent to your email (simulated)" });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+}
+
+const resetPassword = async (req, res) => {
+  const { token, newPassword } = req.body;
+
+  if (!token || !newPassword) {
+    return res.status(400).json({ message: "Token and new password are required" });
+  }
+
+  try {
+    const user = await prisma.user.findFirst({
+      where: {
+        password_reset_token: token,
+        password_reset_expires: {
+          gte: new Date()
+        }
+      }
+    });
+
+    if (!user) {
+      return res.status(400).json({ message: 'Invalid or expired token' });
+    }
+
+    const salt = bcrypt.genSaltSync(10);
+    const hashedPassword = bcrypt.hashSync(newPassword, salt);
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        password: hashedPassword,
+        password_reset_token: null,
+        password_reset_expires: null
+      }
+    });
+
+    res.status(200).json({ message: 'Password reset successful' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+}
+
+export { register, login, confirmEmail, getAllUsers, getUserById, getProfile, updateProfile, deleteUser, forgotPassword, resetPassword };

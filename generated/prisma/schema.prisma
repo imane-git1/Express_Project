@@ -14,6 +14,11 @@ model User {
   email      String   @unique
   password   String
   role       String   @default("user")
+  password_reset_expires   DateTime?
+  password_reset_token     String?
+  email_verification_expires  DateTime?
+  email_verification_token String? 
+  isActive   Boolean  @default(false)
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 }
